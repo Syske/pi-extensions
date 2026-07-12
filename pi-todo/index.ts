@@ -78,13 +78,13 @@ export default function install(pi: ExtensionAPI) {
   const store = new TodoStore();
 
   // ── Session persistence ─────────────────────────────
-  // 每次 persist 都 Append 最新快照；session_start 取最后一个条目而非第一个，
-  // 因此即使有多次 Append，恢复的始终是最新状态。
+  // 只持久化未完成的待办（已完成的不再追踪）。
 
   function persistToSession(): void {
     const snapshot = store.toSnapshot();
-    if (snapshot.items.length > 0) {
-      pi.appendEntry("todo", snapshot);
+    const pendingItems = snapshot.items.filter(i => i.status !== "completed");
+    if (pendingItems.length > 0) {
+      pi.appendEntry("todo", { ...snapshot, items: pendingItems });
     }
   }
 
@@ -115,7 +115,7 @@ export default function install(pi: ExtensionAPI) {
     const reason = event.reason;
     if (reason === "new") return;
 
-    // 取最后一个 todo 条目（最新的快照）
+    // 取最后一个 todo 条目（最新的快照，仅含未完成待办）
     for (const se of ctx.sessionManager.getEntries()) {
       if (se.type === "custom" && se.customType === "todo" && se.data && typeof se.data === "object" && "items" in se.data) {
         store.loadSnapshot(se.data as TodoSnapshot);
