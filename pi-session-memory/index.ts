@@ -8,11 +8,11 @@ import {
   addKnowledge,
   trackPhase,
   buildMemoryPrompt,
-  generateSessionSummary,
   DEFAULT_CONFIG,
   type MemoryState,
   type ExtensionConfig,
 } from "./state"
+import { generateSessionSummary } from "./extractor"
 import {
   extractPatternFromToolResult,
   getToolCallSummary,

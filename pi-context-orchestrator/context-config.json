@@ -1,0 +1,8 @@
+{
+  "contextThreshold": 75,
+  "modelMap": {
+    "small": "deepseek-v4-flash",
+    "medium": "deepseek-v4-flash",
+    "large": "deepseek-v4-pro"
+  }
+}

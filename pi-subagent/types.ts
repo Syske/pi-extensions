@@ -1,6 +1,7 @@
 export interface SubagentOptions {
   name: string;
   systemPrompt: string;
+  model?: string;
   timeoutMs?: number;
 }
 

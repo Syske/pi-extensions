@@ -1,0 +1,14 @@
+{
+  "name": "pi-safety-guard",
+  "version": "0.1.0",
+  "description": "Risk-level authorization guard for Pi — plan before risky actions, approve before execution",
+  "main": "index.ts",
+  "keywords": ["pi-package"],
+  "pi": {
+    "name": "pi-safety-guard",
+    "description": "Safety guard — intercepts risky write/edit/delete/bash/subagent operations, enforces planning and user authorization by risk level"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "latest"
+  }
+}

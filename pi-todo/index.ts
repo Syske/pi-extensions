@@ -76,13 +76,16 @@ class TodoStore {
 
 export default function install(pi: ExtensionAPI) {
   const store = new TodoStore();
+  let persisted = false;
 
   // ── Session persistence ─────────────────────────────
 
-  function persistToSession(ctx?: ExtensionContext): void {
+  function persistToSession(): void {
+    if (persisted) return;
     const snapshot = store.toSnapshot();
     if (snapshot.items.length > 0) {
-      pi.appendEntry("as-todo", snapshot);
+      pi.appendEntry("todo", snapshot);
+      persisted = true;
     }
   }
 
@@ -103,14 +106,21 @@ export default function install(pi: ExtensionAPI) {
     store.rollover(data.from, data.to);
   });
 
+  (pi as any).on("todo:save", async () => {
+    persisted = false;
+    persistToSession();
+  });
+
   // ── Session events ─────────────────────────────────
 
   pi.on("session_start", async (event, ctx) => {
     const reason = event.reason;
     if (reason === "new") return;
 
+    persisted = false;
+
     for (const se of ctx.sessionManager.getEntries()) {
-      if (se.type === "custom" && se.customType === "as-todo" && se.data && typeof se.data === "object" && "items" in se.data) {
+      if (se.type === "custom" && se.customType === "todo" && se.data && typeof se.data === "object" && "items" in se.data) {
         store.loadSnapshot(se.data as TodoSnapshot);
         break;
       }
@@ -200,7 +210,6 @@ export default function install(pi: ExtensionAPI) {
           details: {},
         };
       }
-      persistToSession();
       return {
         content: [{ type: "text", text: `✅ Todo "${params.todoId}" marked as completed.` }],
         details: {},
@@ -239,18 +248,11 @@ export default function install(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("as-todo", {
-    description: "Show all pending todos (alias for /todos)",
-    handler: async (_args, ctx) => {
-      showTodos(ctx);
-    },
-  });
-
   // ── Input handler ──────────────────────────────────
 
   pi.on("input", async (event, ctx) => {
     const text = event.text.trim().toLowerCase();
-    if (text === "todos" || text === "as:todos") {
+    if (text === "todos") {
       showTodos(ctx);
       return { action: "handled" as const };
     }
@@ -259,7 +261,7 @@ export default function install(pi: ExtensionAPI) {
 
   // ── Entry renderer ─────────────────────────────────
 
-  pi.registerEntryRenderer("as-todo", (entry) => {
+  pi.registerEntryRenderer("todo", (entry) => {
     const data = entry.data as TodoSnapshot | undefined;
     if (!data) return;
     const pending = data.items.filter(t => t.status !== "completed").length;

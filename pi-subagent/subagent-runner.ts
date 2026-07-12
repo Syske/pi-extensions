@@ -17,45 +17,59 @@ export class SubagentRunner {
   async spawn(
     options: SubagentOptions,
     ctx: ExtensionCommandContext,
+    setModel?: (id: string) => Promise<void>,
   ): Promise<SubagentResult> {
     const timeoutMs = options.timeoutMs ?? 300000;
+    const previousModel = ctx.model?.id;
+    let modelChanged = false;
+
+    if (options.model && setModel && previousModel !== options.model) {
+      await setModel(options.model);
+      modelChanged = true;
+    }
+
+    const restoreModel = async () => {
+      if (modelChanged && previousModel) {
+        await setModel!(previousModel);
+      }
+    };
 
     return new Promise((resolve) => {
       let finished = false;
 
-      const timer = setTimeout(() => {
-        if (!finished) {
+      const timer = setTimeout(async () => {
+        if (finished) return;
+        finished = true;
+        await restoreModel();
+        resolve({
+          name: options.name,
+          exitCode: -1,
+          artifacts: [],
+          error: `Timeout after ${timeoutMs}ms`,
+          cancelled: false,
+        });
+      }, timeoutMs);
+
+      this.runWithSession(options, ctx)
+        .then(async (result) => {
+          if (finished) return;
           finished = true;
+          clearTimeout(timer);
+          await restoreModel();
+          resolve(result);
+        })
+        .catch(async (err) => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          await restoreModel();
           resolve({
             name: options.name,
             exitCode: -1,
             artifacts: [],
-            error: `Timeout after ${timeoutMs}ms`,
+            error: err instanceof Error ? err.message : String(err),
             cancelled: false,
           });
-        }
-      }, timeoutMs);
-
-      this.runWithSession(options, ctx)
-        .then((result) => {
-          if (!finished) {
-            finished = true;
-            clearTimeout(timer);
-            resolve(result);
-          }
-        })
-        .catch((err) => {
-          if (!finished) {
-            finished = true;
-            clearTimeout(timer);
-            resolve({
-              name: options.name,
-              exitCode: -1,
-              artifacts: [],
-              error: err instanceof Error ? err.message : String(err),
-              cancelled: false,
-            });
-          }
         });
     });
   }
