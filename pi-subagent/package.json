@@ -1,0 +1,19 @@
+{
+  "name": "pi-subagent",
+  "version": "0.1.0",
+  "description": "Generic sub-agent runner extension for Pi — spawn sub-sessions with timeout, token scanning, and artifact collection",
+  "main": "index.ts",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "name": "pi-subagent",
+    "description": "Sub-agent execution utility — spawn isolated sub-sessions with timeout and token scanning"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

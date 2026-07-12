@@ -1,0 +1,9 @@
+node_modules/
+
+# Compiled JS output (Pi runs from .ts source)
+*.js
+*.js.map
+*.d.ts
+
+# Local environment lockfiles
+package-lock.json

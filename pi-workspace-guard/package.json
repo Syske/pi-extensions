@@ -1,0 +1,19 @@
+{
+  "name": "pi-workspace-guard",
+  "version": "0.1.0",
+  "description": "Generic workspace boundary guard for Pi — persist workspace root, enforce path limits, and check trust",
+  "main": "index.ts",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "name": "pi-workspace-guard",
+    "description": "Workspace boundary guard — persist workspace root, enforce path limits, check trust"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

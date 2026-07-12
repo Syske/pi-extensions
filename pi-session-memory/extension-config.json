@@ -1,0 +1,10 @@
+{
+  "injectMemoryOnStart": true,
+  "autoSummarize": true,
+  "maxKnowledgeEntries": 100,
+  "thinkingPhaseMapping": {
+    "deepseek": { "deepseek/deepseek-reasoner": "high" },
+    "claude": { "anthropic/claude-sonnet-5": "high" },
+    "planning": { "anthropic/claude-haiku-5": "low" }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "phaseModels": {
+    "bootstrap": { "provider": "deepseek", "modelId": "deepseek-v4-flash" },
+    "prepare": { "provider": "deepseek", "modelId": "deepseek-v4-flash" },
+    "spec": { "provider": "deepseek", "modelId": "deepseek-v4-flash" },
+    "dev-setup": { "provider": "deepseek", "modelId": "deepseek-v4-flash" },
+    "develop": { "provider": "deepseek", "modelId": "deepseek-v4-flash" },
+    "review": { "provider": "deepseek", "modelId": "deepseek-v4-flash" },
+    "verify": { "provider": "deepseek", "modelId": "deepseek-v4-flash" }
+  },
+  "phaseThinkingLevels": {
+    "bootstrap": "low",
+    "prepare": "medium",
+    "spec": "high",
+    "dev-setup": "low",
+    "develop": "high",
+    "review": "medium",
+    "verify": "medium"
+  }
+}
