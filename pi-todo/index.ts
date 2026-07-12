@@ -168,7 +168,7 @@ export default function install(pi: ExtensionAPI) {
       category: Type.Optional(Type.String({ description: "Filter by category (optional)" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      let todos = store.getActive();
+      let todos = store.getAll();
       if (params.category) {
         todos = todos.filter((t) => t.category === params.category);
       }
@@ -178,7 +178,10 @@ export default function install(pi: ExtensionAPI) {
           details: {},
         };
       }
-      const formatted = todos.map((t) => `[${t.category}] ${t.description} (${t.id})`).join("\n");
+      const formatted = todos.map((t) => {
+        const prefix = t.status === "completed" ? "✅" : "[ ]";
+        return `${prefix} [${t.category}] ${t.description} (${t.id})`;
+      }).join("\n");
       return {
         content: [{ type: "text", text: formatted }],
         details: { todos: todos.map((t) => ({ id: t.id, category: t.category, description: t.description, status: t.status })) },
@@ -216,13 +219,13 @@ export default function install(pi: ExtensionAPI) {
   // ── Commands ───────────────────────────────────────
 
   function showTodos(ctx: ExtensionContext | ExtensionCommandContext): void {
-    const pending = store.getActive();
-    if (pending.length === 0) {
+    const all = store.getAll();
+    if (all.length === 0) {
       ctx.ui.notify("✅ 暂无待办事项", "info");
       return;
     }
     const byCategory = new Map<string, TodoItem[]>();
-    for (const todo of pending) {
+    for (const todo of all) {
       const list = byCategory.get(todo.category) || [];
       list.push(todo);
       byCategory.set(todo.category, list);
@@ -231,7 +234,11 @@ export default function install(pi: ExtensionAPI) {
     for (const [cat, items] of byCategory) {
       output += `\n[${cat}]:\n`;
       for (const item of items) {
-        output += `  - ${item.description} (${item.id})\n`;
+        if (item.status === "completed") {
+          output += `  - ✅ ${item.description} (${item.id})\n`;
+        } else {
+          output += `  - ${item.description} (${item.id})\n`;
+        }
       }
     }
     ctx.ui.notify(output, "info");
