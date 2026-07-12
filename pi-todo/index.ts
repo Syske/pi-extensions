@@ -78,13 +78,12 @@ export default function install(pi: ExtensionAPI) {
   const store = new TodoStore();
 
   // ── Session persistence ─────────────────────────────
-  // 只持久化未完成的待办（已完成的不再追踪）。
+  // 持久化全部条目（含已完成），恢复时 AI 知道哪些完成了、哪些未完成。
 
   function persistToSession(): void {
     const snapshot = store.toSnapshot();
-    const pendingItems = snapshot.items.filter(i => i.status !== "completed");
-    if (pendingItems.length > 0) {
-      pi.appendEntry("todo", { ...snapshot, items: pendingItems });
+    if (snapshot.items.length > 0) {
+      pi.appendEntry("todo", snapshot);
     }
   }
 
