@@ -1,8 +1,21 @@
 {
-  "sessionId": "019f5479-15ad-7c06-9774-81083310df3c",
-  "startedAt": 1783828652939,
-  "totalTurns": 1,
-  "toolStats": {},
+  "sessionId": "019f547f-08f5-7003-a13e-e419bc40e1f7",
+  "startedAt": 1783829042917,
+  "totalTurns": 2,
+  "toolStats": {
+    "workflow_status": {
+      "calls": 3,
+      "errors": 0,
+      "lastCall": 1783829044980,
+      "patterns": []
+    },
+    "list_todos": {
+      "calls": 3,
+      "errors": 0,
+      "lastCall": 1783829044980,
+      "patterns": []
+    }
+  },
   "phases": [],
   "knowledge": []
 }

@@ -29,8 +29,8 @@ export class SubagentRunner {
     }
 
     const restoreModel = async () => {
-      if (modelChanged && previousModel) {
-        await setModel!(previousModel);
+      if (modelChanged && setModel && previousModel) {
+        await setModel(previousModel);
       }
     };
 

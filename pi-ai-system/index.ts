@@ -259,26 +259,20 @@ export default function (pi: ExtensionAPI) {
     updateUI(ctx);
   });
 
-  pi.on("session_shutdown", async () => {
-    await safeAsync("session_shutdown", async () => {
-      if (!engine) return;
+  async function saveCurrentSession(): Promise<void> {
+    if (!engine) return;
+    const session = engine.getSessionStore().loadSession();
+    if (session) {
+      engine.getSessionStore().saveSession(session);
+    }
+  }
 
-      const session = engine.getSessionStore().loadSession();
-      if (session) {
-        engine.getSessionStore().saveSession(session);
-      }
-    });
+  pi.on("session_shutdown", async () => {
+    await safeAsync("session_shutdown", saveCurrentSession);
   });
 
   pi.on("session_compact", async () => {
-    await safeAsync("session_compact", async () => {
-      if (engine) {
-        const session = engine.getSessionStore().loadSession();
-        if (session) {
-          engine.getSessionStore().saveSession(session);
-        }
-      }
-    });
+    await safeAsync("session_compact", saveCurrentSession);
   });
 
   pi.on("turn_end", async (_event, ctx) => {
@@ -295,30 +289,12 @@ export default function (pi: ExtensionAPI) {
     });
   });
 
-  pi.on("model_select", async () => {
-  });
-
-  pi.on("thinking_level_select", async () => {
-  });
-
   pi.on("session_before_switch", async () => {
-    await safeAsync("session_before_switch", async () => {
-      if (!engine) return;
-      const session = engine.getSessionStore().loadSession();
-      if (session) {
-        engine.getSessionStore().saveSession(session);
-      }
-    });
+    await safeAsync("session_before_switch", saveCurrentSession);
   });
 
   pi.on("session_before_fork", async () => {
-    await safeAsync("session_before_fork", async () => {
-      if (!engine) return;
-      const session = engine.getSessionStore().loadSession();
-      if (session) {
-        engine.getSessionStore().saveSession(session);
-      }
-    });
+    await safeAsync("session_before_fork", saveCurrentSession);
   });
 
   pi.on("project_trust", async (event) => {
@@ -365,19 +341,26 @@ export default function (pi: ExtensionAPI) {
     });
   });
 
+  function extractFilePath(input: Record<string, unknown>): string | undefined {
+    return (input.filePath as string | undefined)
+      ?? (input.path as string | undefined)
+      ?? (input.file_path as string | undefined)
+      ?? undefined;
+  }
+
   pi.on("tool_call", async (event, ctx) => {
     await safeAsync("tool_call", async () => {
       const wsPath = guard.getWorkspacePath();
       if (!wsPath) return;
 
       if (isToolCallEventType("write", event)) {
-        const p = event.input.path;
+        const p = extractFilePath(event.input);
         if (p && !path.resolve(p).startsWith(path.resolve(wsPath))) {
           return { block: true, reason: `写入路径 ${p} 不在 ai-workspace (${wsPath}) 内，已拦截` };
         }
       }
       if (isToolCallEventType("edit", event)) {
-        const p = event.input.path;
+        const p = extractFilePath(event.input);
         if (p && !path.resolve(p).startsWith(path.resolve(wsPath))) {
           return { block: true, reason: `编辑路径 ${p} 不在 ai-workspace (${wsPath}) 内，已拦截` };
         }

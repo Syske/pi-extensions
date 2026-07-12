@@ -2,11 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import type { OrchestratorConfig } from "./types"
 
 function emitSaveTodos(pi: ExtensionAPI): void {
-  try {
-    (pi as any).events?.emit?.("todo:save", {})
-  } catch {
-    // pi-todo might not be installed; ignore
-  }
+  (pi as any).events?.emit?.("todo:save", {})
 }
 
 function generateSummary(

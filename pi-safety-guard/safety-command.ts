@@ -2,6 +2,14 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent"
 import { ScopeCache } from "./scope-cache"
 import type { SafetyConfig } from "./types"
 
+function parseArgs(args: string, expected: number): string[] {
+  const parts = args.trim().split(/\s+/);
+  if (parts.length === 0 || (parts.length === 1 && parts[0] === "")) {
+    return [];
+  }
+  return parts.slice(0, expected);
+}
+
 export function registerSafetyCommand(
   pi: any,
   cache: ScopeCache,
@@ -9,8 +17,9 @@ export function registerSafetyCommand(
 ): void {
   pi.registerCommand("safety", {
     description: "View and manage safety guard state",
-    handler: async (args: string[], ctx: ExtensionCommandContext) => {
-      const sub = args[0]?.toLowerCase()
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      const parts = parseArgs(args, 2)
+      const sub = parts[0]?.toLowerCase()
 
       if (sub === "status" || !sub) {
         const stats = cache.stats()
@@ -32,7 +41,7 @@ export function registerSafetyCommand(
       }
 
       if (sub === "revoke") {
-        const key = args.slice(1).join(" ")
+        const key = parts.slice(1).join(" ")
         if (!key) {
           ctx.ui.notify("用法: /safety revoke <文件路径或命令>", "error")
           return
