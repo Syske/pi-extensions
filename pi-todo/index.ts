@@ -1,273 +1,346 @@
-import { type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
-import { Text } from "@earendil-works/pi-tui";
-import { type TodoItem, type TodoSnapshot } from "./types";
+/**
+ * pi-todo — Persistent per-project todo tracker with live TUI widget
+ *
+ * Registers a `todo` tool the LLM can call to manage a task list stored in
+ * `.pi/todo.json` in the project root. A live widget above the editor shows
+ * the current state at all times.
+ */
 
-class TodoStore {
-  private items: TodoItem[] = [];
-  private counter = 0;
+import * as fs from "node:fs";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Text, type Component } from "@earendil-works/pi-tui";
+import { TodoParams } from "./schemas.ts";
+import {
+	addItem,
+	clearCompleted,
+	listItems,
+	readStore,
+	removeItem,
+	reorderItem,
+	toggleItem,
+	updateItem,
+	type TodoItem,
+	type TodoPriority,
+	type TodoStatus,
+} from "./store.ts";
+import { createWidgetComponent, renderTodoResult } from "./render.ts";
 
-  add(category: string, description: string): void {
-    this.items.push({
-      id: `todo-${category}-${++this.counter}`,
-      category,
-      description,
-      status: "pending",
-      createdAt: new Date().toISOString(),
-    });
-  }
+const WIDGET_KEY = "todo";
 
-  addBatch(category: string, descriptions: string[]): TodoItem[] {
-    return descriptions.map((desc) => {
-      const item: TodoItem = {
-        id: `todo-${category}-${++this.counter}`,
-        category,
-        description: desc,
-        status: "pending" as const,
-        createdAt: new Date().toISOString(),
-      };
-      this.items.push(item);
-      return item;
-    });
-  }
-
-  complete(id: string): string | null {
-    const item = this.items.find((i) => i.id === id);
-    if (item) {
-      item.status = "completed";
-      return item.id;
-    }
-    return null;
-  }
-
-  getActive(category?: string): TodoItem[] {
-    const active = this.items.filter((i) => i.status !== "completed");
-    if (category) return active.filter((i) => i.category === category);
-    return active;
-  }
-
-  getAll(): TodoItem[] {
-    return [...this.items];
-  }
-
-  rollover(fromCategory: string, toCategory: string): void {
-    const unfinished = this.items.filter(
-      (i) => i.category === fromCategory && i.status !== "completed"
-    );
-    for (const item of unfinished) {
-      this.items.push({
-        ...item,
-        id: `todo-${toCategory}-${++this.counter}`,
-        category: toCategory,
-        createdAt: new Date().toISOString(),
-      });
-    }
-  }
-
-  toSnapshot(): TodoSnapshot {
-    return { items: [...this.items], counter: this.counter };
-  }
-
-  loadSnapshot(data: TodoSnapshot): void {
-    this.items = data.items.map((item) => ({ ...item }));
-    this.counter = data.counter;
-  }
+/** Update the live widget from the current store state */
+function refreshWidget(pi: ExtensionAPI, cwd: string): void {
+	// We need a UI context — grab it from the last known context
+	// The widget is set via ctx.ui, but we can also use pi's event system
+	// For now, we store the last context and use it here
+	const ctx = lastCtx;
+	if (!ctx || !ctx.hasUI) return;
+	const store = readStore(cwd);
+	if (store.items.length === 0) {
+		ctx.ui.setWidget(WIDGET_KEY, undefined);
+		return;
+	}
+	ctx.ui.setWidget(WIDGET_KEY, createWidgetComponent(store.items));
 }
 
-export default function install(pi: ExtensionAPI) {
-  const store = new TodoStore();
+// Track the last known UI context for widget updates
+let lastCtx: ExtensionContext | null = null;
 
-  // ── Session persistence ─────────────────────────────
-  // 持久化全部条目（含已完成），恢复时 AI 知道哪些完成了、哪些未完成。
+interface TodoDetails {
+	action: string;
+	items: TodoItem[];
+	item?: TodoItem;
+	removed?: number;
+	moved?: boolean;
+	error?: string;
+}
 
-  function persistToSession(): void {
-    const snapshot = store.toSnapshot();
-    if (snapshot.items.length > 0) {
-      pi.appendEntry("todo", snapshot);
-    }
-  }
+export default function registerTodoExtension(pi: ExtensionAPI): void {
+	const tool: ToolDefinition<typeof TodoParams, TodoDetails> = {
+		name: "todo",
+		label: "Todo",
+		description: `Manage a persistent per-project todo list stored in .pi/todo.json. The list survives across sessions and is shown as a live widget above the editor.
 
-  // ── Custom events (pi.on typing is strict; cast is safe at runtime) ──
+Actions:
+- add: Create a new todo item (requires text, optional: priority, assignee, blockedBy)
+- update: Modify an existing item by ID (requires id, optional: text, status, priority, assignee, blockedBy)
+- toggle: Cycle status pending → in-progress → done → pending (requires id)
+- remove: Delete an item by ID (requires id)
+- list: List all items, optionally filtered by status (optional: filter)
+- clear: Remove all completed items
+- reorder: Move an item up or down in the list (requires id, direction)
 
-  (pi as any).on("todo:add", async (data: { category: string; items: string[] }) => {
-    if (!data?.category || !data?.items?.length) return;
-    store.addBatch(data.category, data.items);
-  });
+Only the main agent can modify the todo list. Subagents cannot call this tool.`,
+		parameters: TodoParams,
+		promptSnippet: "Manage a persistent todo list with add, update, toggle, remove, list, clear, and reorder actions.",
+		promptGuidelines: [
+			"Use the todo tool to track multi-step tasks — add items before starting work, toggle to in-progress when beginning, toggle to done when complete.",
+			"Always set the assignee field to the agent doing the work (e.g. Ultron, Marcus, Quinn, Maya).",
+			"Use blockedBy to mark tasks that can't start until another task is done.",
+		],
 
-  (pi as any).on("todo:complete", async (data: { todoId: string }) => {
-    if (!data?.todoId) return;
-    store.complete(data.todoId);
-  });
+		async execute(toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<TodoDetails>> {
+			lastCtx = ctx;
+			const cwd = ctx.cwd;
+			const width = process.stdout.columns || 120;
 
-  (pi as any).on("todo:rollover", async (data: { from: string; to: string }) => {
-    if (!data?.from || !data?.to) return;
-    store.rollover(data.from, data.to);
-  });
+			try {
+				switch (params.action) {
+					case "add": {
+						if (!params.text) {
+							return {
+								content: [{ type: "text", text: "Error: 'text' is required for add action." }],
+								isError: true,
+								details: { action: "add", items: [], error: "text is required" },
+							};
+						}
+						const item = addItem(
+							cwd,
+							params.text,
+							params.priority as TodoPriority | undefined,
+							params.assignee,
+							params.blockedBy,
+						);
+						refreshWidget(pi, cwd);
+						const all = listItems(cwd);
+						return {
+							content: [{ type: "text", text: `Added: ${item.id} — ${item.text}` }],
+							details: { action: "add", items: all, item },
+						};
+					}
 
-  (pi as any).on("todo:save", async () => {
-    persistToSession();
-  });
+					case "update": {
+						if (!params.id) {
+							return {
+								content: [{ type: "text", text: "Error: 'id' is required for update action." }],
+								isError: true,
+								details: { action: "update", items: [], error: "id is required" },
+							};
+						}
+						const updated = updateItem(cwd, params.id, {
+							text: params.text,
+							status: params.status as TodoStatus | undefined,
+							priority: params.priority as TodoPriority | undefined,
+							assignee: params.assignee,
+							blockedBy: params.blockedBy,
+						});
+						if (!updated) {
+							return {
+								content: [{ type: "text", text: `Error: Item ${params.id} not found.` }],
+								isError: true,
+								details: { action: "update", items: [], error: "item not found" },
+							};
+						}
+						refreshWidget(pi, cwd);
+						const all = listItems(cwd);
+						return {
+							content: [{ type: "text", text: `Updated: ${updated.id} — ${updated.text} [${updated.status}]` }],
+							details: { action: "update", items: all, item: updated },
+						};
+					}
 
-  // ── Session events ─────────────────────────────────
+					case "toggle": {
+						if (!params.id) {
+							return {
+								content: [{ type: "text", text: "Error: 'id' is required for toggle action." }],
+								isError: true,
+								details: { action: "toggle", items: [], error: "id is required" },
+							};
+						}
+						const toggled = toggleItem(cwd, params.id);
+						if (!toggled) {
+							return {
+								content: [{ type: "text", text: `Error: Item ${params.id} not found.` }],
+								isError: true,
+								details: { action: "toggle", items: [], error: "item not found" },
+							};
+						}
+						refreshWidget(pi, cwd);
+						const all = listItems(cwd);
+						return {
+							content: [{ type: "text", text: `Toggled: ${toggled.id} — ${toggled.text} → ${toggled.status}` }],
+							details: { action: "toggle", items: all, item: toggled },
+						};
+					}
 
-  pi.on("session_start", async (event, ctx) => {
-    const reason = event.reason;
-    if (reason === "new") return;
+					case "remove": {
+						if (!params.id) {
+							return {
+								content: [{ type: "text", text: "Error: 'id' is required for remove action." }],
+								isError: true,
+								details: { action: "remove", items: [], error: "id is required" },
+							};
+						}
+						const removed = removeItem(cwd, params.id);
+						if (!removed) {
+							return {
+								content: [{ type: "text", text: `Error: Item ${params.id} not found.` }],
+								isError: true,
+								details: { action: "remove", items: [], error: "item not found" },
+							};
+						}
+						refreshWidget(pi, cwd);
+						const all = listItems(cwd);
+						return {
+							content: [{ type: "text", text: `Removed: ${params.id}` }],
+							details: { action: "remove", items: all },
+						};
+					}
 
-    // 取最后一个 todo 条目（最新的快照，仅含未完成待办）
-    for (const se of ctx.sessionManager.getEntries()) {
-      if (se.type === "custom" && se.customType === "todo" && se.data && typeof se.data === "object" && "items" in se.data) {
-        store.loadSnapshot(se.data as TodoSnapshot);
-      }
-    }
-  });
+					case "list": {
+						const items = listItems(cwd, params.filter);
+						return {
+							content: [{ type: "text", text: formatListText(items) }],
+							details: { action: "list", items },
+						};
+					}
 
-  pi.on("session_shutdown", async () => {
-    persistToSession();
-  });
+					case "clear": {
+						const count = clearCompleted(cwd);
+						refreshWidget(pi, cwd);
+						const all = listItems(cwd);
+						return {
+							content: [{ type: "text", text: `Cleared ${count} completed item${count === 1 ? "" : "s"}.` }],
+							details: { action: "clear", items: all, removed: count },
+						};
+					}
 
-  pi.on("session_before_switch", async () => {
-    persistToSession();
-  });
+					case "reorder": {
+						if (!params.id) {
+							return {
+								content: [{ type: "text", text: "Error: 'id' is required for reorder action." }],
+								isError: true,
+								details: { action: "reorder", items: [], error: "id is required" },
+							};
+						}
+						if (!params.direction) {
+							return {
+								content: [{ type: "text", text: "Error: 'direction' is required for reorder action." }],
+								isError: true,
+								details: { action: "reorder", items: [], error: "direction is required" },
+							};
+						}
+						const moved = reorderItem(cwd, params.id, params.direction);
+						if (!moved) {
+							return {
+								content: [{ type: "text", text: `Error: Could not reorder ${params.id} (not found or already at ${params.direction === "up" ? "top" : "bottom"}).` }],
+								isError: true,
+								details: { action: "reorder", items: [], error: "cannot reorder" },
+							};
+						}
+						refreshWidget(pi, cwd);
+						const all = listItems(cwd);
+						return {
+							content: [{ type: "text", text: `Reordered: ${params.id} ${params.direction}` }],
+							details: { action: "reorder", items: all, moved: true },
+						};
+					}
 
-  pi.on("session_before_fork", async () => {
-    persistToSession();
-  });
+					default:
+						return {
+							content: [{ type: "text", text: `Error: Unknown action '${params.action}'.` }],
+							isError: true,
+							details: { action: String(params.action), items: [], error: "unknown action" },
+						};
+				}
+			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
+				return {
+					content: [{ type: "text", text: `Error: ${msg}` }],
+					isError: true,
+					details: { action: String(params.action), items: [], error: msg },
+				};
+			}
+		},
 
-  // ── System prompt injection ────────────────────────
+		renderCall(args, theme) {
+			const action = args.action || "?";
+			if (action === "list") {
+				return new Text(`${theme.fg("toolTitle", theme.bold("todo "))}list${args.filter ? ` ${theme.fg("dim", args.filter)}` : ""}`, 0, 0);
+			}
+			if (action === "add" && args.text) {
+				const preview = args.text.length > 50 ? `${args.text.slice(0, 49)}…` : args.text;
+				return new Text(`${theme.fg("toolTitle", theme.bold("todo "))}add ${theme.fg("accent", `"${preview}"`)}`, 0, 0);
+			}
+			const target = args.id || "";
+			return new Text(`${theme.fg("toolTitle", theme.bold("todo "))}${action}${target ? ` ${theme.fg("accent", target)}` : ""}`, 0, 0);
+		},
 
-  pi.on("before_agent_start", async (event) => {
-    const pending = store.getActive();
-    if (pending.length === 0) return;
+		renderResult(result, options, theme, _context) {
+			const details = result.details as TodoDetails | undefined;
+			if (!details) {
+				const text = typeof result.content === "string"
+					? result.content
+					: result.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+				return new Text(text, 0, 0);
+			}
+			if (result.isError) {
+				const text = typeof result.content === "string"
+					? result.content
+					: result.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+				return new Text(theme.fg("error", text), 0, 0);
+			}
+			const width = process.stdout.columns || 120;
+			return renderTodoResult(details.items, theme, width);
+		},
+	};
 
-    const lines: string[] = [
-      "=== 待办事项 ===",
-    ];
-    for (const todo of pending) {
-      lines.push(`  - [${todo.status}] ${todo.description} (${todo.id})`);
-    }
-    lines.push("================");
+	pi.registerTool(tool);
 
-    return {
-      systemPrompt: event.systemPrompt + "\n\n" + lines.join("\n"),
-    };
-  });
+	// Slash command: /todo
+	pi.registerCommand("todo", {
+		description: "List all todo items, or clear completed items with '/todo clear'",
+		async handler(args, ctx) {
+			lastCtx = ctx;
+			const cwd = ctx.cwd;
+			const arg = args.trim();
 
-  // ── LLM Tools ──────────────────────────────────────
+			if (arg === "clear") {
+				const count = clearCompleted(cwd);
+				refreshWidget(pi, cwd);
+				ctx.ui.notify(`Cleared ${count} completed item${count === 1 ? "" : "s"}.`, "info");
+				return;
+			}
 
-  pi.registerTool({
-    name: "list_todos",
-    label: "List Todos",
-    description: "List all pending todos, optionally filtered by category",
-    promptSnippet: "Show what work items are pending",
-    promptGuidelines: [
-      "Use list_todos when the user asks what needs to be done next",
-    ],
-    parameters: Type.Object({
-      category: Type.Optional(Type.String({ description: "Filter by category (optional)" })),
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      let todos = store.getAll();
-      if (params.category) {
-        todos = todos.filter((t) => t.category === params.category);
-      }
-      if (todos.length === 0) {
-        return {
-          content: [{ type: "text", text: "No pending todos." }],
-          details: {},
-        };
-      }
-      const formatted = todos.map((t) => {
-        const prefix = t.status === "completed" ? "✅" : "[ ]";
-        return `${prefix} [${t.category}] ${t.description} (${t.id})`;
-      }).join("\n");
-      return {
-        content: [{ type: "text", text: formatted }],
-        details: { todos: todos.map((t) => ({ id: t.id, category: t.category, description: t.description, status: t.status })) },
-      };
-    },
-  });
+			const items = listItems(cwd);
+			if (items.length === 0) {
+				ctx.ui.notify("No todo items.", "info");
+				return;
+			}
+			ctx.ui.notify(formatListText(items), "info");
+		},
+	});
 
-  pi.registerTool({
-    name: "complete_todo",
-    label: "Complete Todo",
-    description: "Mark a todo item as completed by its ID",
-    promptSnippet: "Mark a work item as done",
-    promptGuidelines: [
-      "Use complete_todo when the user says a task is done or finished",
-    ],
-    parameters: Type.Object({
-      todoId: Type.String({ description: "The ID of the todo to mark as completed (e.g. todo-prepare-1)" }),
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const result = store.complete(params.todoId);
-      if (!result) {
-        return {
-          content: [{ type: "text", text: `❌ Todo "${params.todoId}" not found.` }],
-          isError: true,
-          details: {},
-        };
-      }
-      return {
-        content: [{ type: "text", text: `✅ Todo "${params.todoId}" marked as completed.` }],
-        details: {},
-      };
-    },
-  });
+	// Session start: load existing todos and render widget
+	pi.on("session_start", (_event, ctx) => {
+		lastCtx = ctx;
+		const cwd = ctx.cwd;
+		const todoPath = `${cwd}/.pi/todo.json`;
+		if (!fs.existsSync(todoPath)) return;
+		const store = readStore(cwd);
+		if (store.items.length === 0) return;
+		if (ctx.hasUI) {
+			ctx.ui.setWidget(WIDGET_KEY, createWidgetComponent(store.items));
+		}
+	});
 
-  // ── Commands ───────────────────────────────────────
+	// Session shutdown: clear widget
+	pi.on("session_shutdown", (_event, ctx) => {
+		if (ctx.hasUI) {
+			ctx.ui.setWidget(WIDGET_KEY, undefined);
+		}
+	});
+}
 
-  function showTodos(ctx: ExtensionContext | ExtensionCommandContext): void {
-    const all = store.getAll();
-    if (all.length === 0) {
-      ctx.ui.notify("✅ 暂无待办事项", "info");
-      return;
-    }
-    const byCategory = new Map<string, TodoItem[]>();
-    for (const todo of all) {
-      const list = byCategory.get(todo.category) || [];
-      list.push(todo);
-      byCategory.set(todo.category, list);
-    }
-    let output = "📋 待办事项\n";
-    for (const [cat, items] of byCategory) {
-      output += `\n[${cat}]:\n`;
-      for (const item of items) {
-        if (item.status === "completed") {
-          output += `  - ✅ ${item.description} (${item.id})\n`;
-        } else {
-          output += `  - ${item.description} (${item.id})\n`;
-        }
-      }
-    }
-    ctx.ui.notify(output, "info");
-  }
-
-  pi.registerCommand("todos", {
-    description: "Show all pending todos",
-    handler: async (_args, ctx) => {
-      showTodos(ctx);
-    },
-  });
-
-  // ── Input handler ──────────────────────────────────
-
-  pi.on("input", async (event, ctx) => {
-    const text = event.text.trim().toLowerCase();
-    if (text === "todos") {
-      showTodos(ctx);
-      return { action: "handled" as const };
-    }
-    return { action: "continue" as const };
-  });
-
-  // ── Entry renderer ─────────────────────────────────
-
-  pi.registerEntryRenderer("todo", (entry) => {
-    const data = entry.data as TodoSnapshot | undefined;
-    if (!data) return;
-    const pending = data.items.filter(t => t.status !== "completed").length;
-    const done = data.items.length - pending;
-    return new Text(`📋 ${pending} 待办 (${done}✓)`);
-  });
+/** Format items as a plain text list for slash command output */
+function formatListText(items: TodoItem[]): string {
+	if (items.length === 0) return "No todo items.";
+	const lines: string[] = [];
+	for (const item of items) {
+		const icon = item.status === "done" ? "[x]" : item.status === "in-progress" ? "[•]" : item.status === "blocked" ? "[!]" : "[ ]";
+		const assignee = item.assignee ? ` · ${item.assignee}` : "";
+		const blocked = item.blockedBy ? ` (blocked by ${item.blockedBy})` : "";
+		lines.push(`${icon} ${item.id} [${item.priority.toUpperCase()}] ${item.text}${assignee}${blocked}`);
+	}
+	return lines.join("\n");
 }
